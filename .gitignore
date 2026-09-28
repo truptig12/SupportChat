@@ -1,0 +1,13 @@
+# Secrets
+.env
+
+# Local data (contains redacted chat history)
+*.db
+*.db-shm
+*.db-wal
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
