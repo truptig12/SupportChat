@@ -41,6 +41,7 @@ from pydantic import BaseModel, Field
 
 from .config import Settings
 from .guardrails import RateLimiter
+from .integrations import IncidentService, ServiceStatusProvider
 from .llm import make_backend
 from .memory import MemoryStore
 from .service import ChatService, SessionNotFound
@@ -122,6 +123,62 @@ class MemoryItem(BaseModel):
     created_at: str
 
 
+# ---- Mock ServiceNow: service status + incidents -----------------------------
+
+class ServiceStatusOut(BaseModel):
+    status: str = Field(..., description="operational | known_issue")
+    title: str
+    message: str
+    affects: List[str]
+    checked_at: str
+
+
+class ServiceStatusIn(BaseModel):
+    status: str = Field(..., pattern=r"^(operational|known_issue)$")
+    message: Optional[str] = Field(None, max_length=300)
+    affects: List[str] = Field(default_factory=lambda: ["login"], max_length=10)
+
+
+class DeviceContext(BaseModel):
+    """Auto-detected by the app (non-sensitive)."""
+    app_version: Optional[str] = Field(None, max_length=40)
+    device: Optional[str] = Field(None, max_length=120)
+    network: Optional[str] = Field(None, max_length=60)
+    attempts: Optional[int] = Field(None, ge=0, le=1000)
+
+
+class IncidentIn(BaseModel):
+    """The support summary the customer reviewed (and may have edited)."""
+    issue: str = Field(..., min_length=1, max_length=200)
+    journey_stage: Optional[str] = Field(None, max_length=100)
+    error_code: Optional[str] = Field(None, max_length=40)
+    steps_tried: List[str] = Field(default_factory=list, max_length=10)
+    context: DeviceContext = Field(default_factory=DeviceContext)
+    service_status: Optional[str] = Field(None, max_length=100)
+    suggested_cause: Optional[str] = Field(None, max_length=200, description="AI suggestion, not a diagnosis")
+    customer_reference: Optional[str] = Field(None, max_length=64,
+                                              description="User ID the customer typed. UNVERIFIED (not logged in).")
+    message: Optional[str] = Field(None, max_length=1000)
+    session_id: Optional[str] = Field(None, pattern=r"^[a-f0-9]{32}$")
+    confirmed: bool = Field(..., description="Customer ticked 'this information is correct'")
+
+
+class TimelineStep(BaseModel):
+    key: str
+    label: str
+    done: bool
+    at: Optional[str]
+
+
+class IncidentOut(BaseModel):
+    reference: str
+    status: str
+    status_label: str
+    created_at: str
+    timeline: List[TimelineStep]
+    summary: dict
+
+
 # ===========================================================================
 # App wiring
 # ===========================================================================
@@ -135,6 +192,8 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         app.state.settings = settings
         app.state.service = ChatService(store, make_backend(settings), settings)
         app.state.limiter = RateLimiter(settings.rate_limit_per_minute, settings.rate_limit_burst)
+        app.state.status_provider = ServiceStatusProvider(settings.service_status, settings.service_status_message)
+        app.state.incidents = IncidentService(store, settings.incident_progress_seconds)
 
         async def sweeper():
             # Summarizes sessions users walked away from and purges expired
@@ -248,6 +307,39 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     def forget_me(user_id: str = Depends(get_current_user),
                   svc: ChatService = Depends(get_service)):
         return {"deleted": svc.store.delete_summaries(user_id)}
+
+    # ---- Mock ServiceNow ------------------------------------------------------
+
+    @app.get("/v1/service-status", response_model=ServiceStatusOut)
+    def service_status(request: Request, _: str = Depends(get_current_user)):
+        """Known issues check the app runs BEFORE asking the customer to troubleshoot."""
+        return request.app.state.status_provider.get()
+
+    @app.put("/v1/admin/service-status", response_model=ServiceStatusOut)
+    def set_service_status(body: ServiceStatusIn, request: Request,
+                           x_admin_key: str = Header(..., description="ADMIN_API_KEY")):
+        """DEV ONLY: simulate an outage so the 'known issue' path can be demoed."""
+        if not hmac.compare_digest(x_admin_key, settings.admin_api_key):
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid admin key")
+        return request.app.state.status_provider.set(body.status, body.message, body.affects)
+
+    @app.post("/v1/incidents", response_model=IncidentOut, status_code=201)
+    def create_incident(body: IncidentIn, request: Request,
+                        user_id: str = Depends(rate_limited_user)):
+        if not body.confirmed:
+            raise HTTPException(422,
+                                "customer must confirm the summary before raising an incident")
+        data = body.model_dump(exclude={"confirmed"})
+        inc = request.app.state.incidents.create(user_id, data)
+        log.warning("incident raised ref=%s issue=%s", inc["reference"], inc["summary"].get("issue"))
+        return inc
+
+    @app.get("/v1/incidents/{reference}", response_model=IncidentOut)
+    def get_incident(reference: str, request: Request, user_id: str = Depends(get_current_user)):
+        inc = request.app.state.incidents.get(user_id, reference)
+        if not inc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "incident not found")
+        return inc
 
     return app
 

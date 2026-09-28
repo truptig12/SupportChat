@@ -36,6 +36,8 @@ Customer: "i got chraged twice for my subscribtion!!! want a refnd"
 18. [Project layout](#18-project-layout)
 
 Mobile developers should read **[docs/MOBILE_INTEGRATION.md](docs/MOBILE_INTEGRATION.md)**.
+A working Android prototype (Compose) of the AI-first Call us page and the login-support journey is in
+**[android/](android/README.md)**.
 
 ---
 
@@ -597,6 +599,24 @@ All `/v1/*` endpoints require two headers:
 | `GET` | `/v1/me/memory` | What the assistant remembers about this user | `200` |
 | `DELETE` | `/v1/me/memory` | Forget this user's summaries | `200` |
 | `GET` | `/healthz` | Liveness (no auth) | `200` |
+| `GET` | `/v1/service-status` | Known-issues check (**mock ServiceNow**) | `200` |
+| `PUT` | `/v1/admin/service-status` | DEV ONLY: simulate an outage (`X-Admin-Key` header = `ADMIN_API_KEY`) | `200` |
+| `POST` | `/v1/incidents` | Raise an incident from the confirmed support summary (**mock ServiceNow**) | `201` |
+| `GET` | `/v1/incidents/{ref}` | Track an incident (creator only) | `200` |
+
+### Mock ServiceNow (`support_router/integrations.py`)
+
+These endpoints let the Android login-support journey run end to end before a real ServiceNow
+integration exists. Swapping in the real thing means reimplementing two classes
+(`ServiceStatusProvider`, `IncidentService`); the API contract and the app stay the same.
+
+- **Service status** is kept in memory per process. The starting value comes from `SERVICE_STATUS`
+  (`operational` / `known_issue`), and the admin endpoint changes it.
+- **Incidents** are stored in SQLite (`incidents` table) with sequential references (`INC-100001`, …).
+  Every free-text field is PII-redacted before storage. The customer must send `"confirmed": true`.
+- **Mock lifecycle:** `received` → `under_investigation` after `INCIDENT_PROGRESS_SECONDS` (120).
+- `customer_reference` is the User ID the customer typed while **not logged in**. It is stored as
+  unverified, never trusted.
 
 ### `POST /v1/chat`
 
@@ -694,6 +714,10 @@ All settings come from environment variables or `.env`. See [`.env.example`](.en
 | `RATE_LIMIT_PER_MINUTE` | `20` | Per user |
 | `RATE_LIMIT_BURST` | `5` | Extra headroom |
 | `LOG_LEVEL` | `INFO` | |
+| `ADMIN_API_KEY` | `dev-admin-key-change-me` | Protects `PUT /v1/admin/service-status` (dev only) |
+| `SERVICE_STATUS` | `operational` | Starting mock status: `operational` or `known_issue` |
+| `SERVICE_STATUS_MESSAGE` | *We're aware of a current issue affecting login.* | Text shown for `known_issue` |
+| `INCIDENT_PROGRESS_SECONDS` | `120` | Mock incident: seconds until `under_investigation` |
 
 ---
 
@@ -705,13 +729,14 @@ All settings come from environment variables or `.env`. See [`.env.example`](.en
 .venv/bin/python -m pytest -q
 ```
 
-39 tests using the mock backend and a temporary SQLite database:
+46 tests using the mock backend and a temporary SQLite database:
 
 | File | Covers |
 |------|--------|
 | `tests/test_guardrails.py` | Sanitizing; PII (card Luhn vs order numbers, Aadhaar inside card numbers, phones); promise and link filter; rate limiter |
 | `tests/test_router.py` | Sub-intents, multi-intent, clarification (including no double-asking and never stalling urgent cases), follow-ups, every escalation rule, LLM failure fallbacks, malformed LLM output, cross-branch sub-intents, promise replacement |
 | `tests/test_api.py` | Auth, response contract, multi-turn, clarify→answer flow, cross-user isolation, PII never in the DB, one handoff per session, end → summary → memory, repeat-contact escalation from memory, idle rotation, forget-me, 429 + Retry-After, input validation |
+| `tests/test_integrations.py` | Mock ServiceNow: default status, admin toggle and auth, incident creation with PII redaction, confirmation required, time-based progression, creator-only access, sequential references |
 
 The multilingual cases need a real key. The mock is English-only.
 
@@ -719,9 +744,9 @@ The multilingual cases need a real key. The mock is English-only.
 
 Import both files from [`postman/`](postman/):
 
-1. `support-router.postman_collection.json`: 42 requests in 9 folders (basic routing, clarification,
-   multi-intent, escalation, guardrails, multilingual, sessions and memory, errors)
-2. `local.postman_environment.json`: `baseUrl`, `apiKey`, `userId`
+1. `support-router.postman_collection.json`: 48 requests in 10 folders (basic routing, clarification,
+   multi-intent, escalation, guardrails, multilingual, sessions and memory, mock ServiceNow, errors)
+2. `local.postman_environment.json`: `baseUrl`, `apiKey`, `userId`, `adminKey`
 
 Then:
 
@@ -805,6 +830,7 @@ Then run the Postman collection with a real key.
 ├── .env.example                  ← copy to .env, put keys here
 ├── .gitignore                    ← ignores .env, *.db, .venv
 ├── dynamic_router_poc.py         ← original single-file POC (reference)
+├── android/                      ← Compose prototype: Call us + login-support journey (see android/README.md)
 ├── docs/
 │   └── MOBILE_INTEGRATION.md     ← guide for iOS / Android / React Native devs
 ├── postman/
@@ -819,10 +845,12 @@ Then run the Postman collection with a real key.
 │   ├── router.py                 ← 2-stage routing, clarification, escalation, buttons
 │   ├── memory.py                 ← SQLite store
 │   ├── service.py                ← session lifecycle, handoffs, summaries
+│   ├── integrations.py           ← mock ServiceNow: service status + incidents
 │   └── api.py                    ← FastAPI app
 └── tests/
     ├── conftest.py
     ├── test_guardrails.py
     ├── test_router.py
-    └── test_api.py
+    ├── test_api.py
+    └── test_integrations.py
 ```

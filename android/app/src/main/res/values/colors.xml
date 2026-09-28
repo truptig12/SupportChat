@@ -1,0 +1,5 @@
+<resources>
+    <!-- Only what XML needs (launcher icon, window). Compose colors live in ui/theme/Theme.kt. -->
+    <color name="header">#0B5E36</color>
+    <color name="window_bg">#0A0A0A</color>
+</resources>

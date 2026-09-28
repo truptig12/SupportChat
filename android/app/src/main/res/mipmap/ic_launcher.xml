@@ -1,0 +1,5 @@
+<!-- Legacy (API 24-25) launcher icon: same art on a filled square. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/header" />
+    <item android:drawable="@drawable/ic_launcher_foreground" />
+</layer-list>

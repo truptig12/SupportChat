@@ -72,6 +72,16 @@ class Settings:
 
     # --- Auth (DEV ONLY — see api.get_current_user) ---------------------------
     app_api_key: str = field(default_factory=lambda: os.getenv("APP_API_KEY", "dev-key-change-me"))
+    # Protects the dev-only mock admin endpoints (e.g. toggling service status).
+    admin_api_key: str = field(default_factory=lambda: os.getenv("ADMIN_API_KEY", "dev-admin-key-change-me"))
+
+    # --- Mock integrations (stand-ins for ServiceNow) ------------------------
+    # Initial service status: "operational" or "known_issue".
+    service_status: str = field(default_factory=lambda: os.getenv("SERVICE_STATUS", "operational"))
+    service_status_message: str = field(default_factory=lambda: os.getenv(
+        "SERVICE_STATUS_MESSAGE", "We're aware of a current issue affecting login."))
+    # Mock incident lifecycle: "received" -> "under_investigation" after this long.
+    incident_progress_seconds: int = field(default_factory=lambda: _env_int("INCIDENT_PROGRESS_SECONDS", 120))
 
     @property
     def use_real_llm(self) -> bool:

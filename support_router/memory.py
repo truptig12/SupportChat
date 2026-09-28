@@ -67,6 +67,16 @@ CREATE TABLE IF NOT EXISTS handoffs (
     created_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_handoffs_session ON handoffs(session_id, status);
+
+-- Mock ServiceNow incidents raised from the app (see integrations.py).
+CREATE TABLE IF NOT EXISTS incidents (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    reference   TEXT UNIQUE,              -- INC-100001, INC-100002, ...
+    user_id     TEXT NOT NULL,
+    data        TEXT NOT NULL,            -- JSON support summary (REDACTED)
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_incidents_user ON incidents(user_id);
 """
 
 
@@ -235,3 +245,22 @@ class MemoryStore:
         with self._conn() as c:
             c.execute("UPDATE handoffs SET priority=?, reasons=? WHERE id=?",
                       (priority, json.dumps(reasons), handoff_id))
+
+    # ---- incidents (mock ServiceNow) --------------------------------------------
+
+    def create_incident(self, user_id: str, data: Dict[str, Any]) -> str:
+        """Insert and return a human-friendly sequential reference (INC-100001...)."""
+        with self._conn() as c:
+            cur = c.execute("INSERT INTO incidents (user_id, data, created_at) VALUES (?,?,?)",
+                            (user_id, json.dumps(data), _iso(_now())))
+            ref = f"INC-{100000 + int(cur.lastrowid)}"
+            c.execute("UPDATE incidents SET reference=? WHERE id=?", (ref, cur.lastrowid))
+        return ref
+
+    def get_incident(self, reference: str) -> Optional[Dict[str, Any]]:
+        with self._conn() as c:
+            row = c.execute("SELECT * FROM incidents WHERE reference=?", (reference,)).fetchone()
+        if not row:
+            return None
+        return {"reference": row["reference"], "user_id": row["user_id"],
+                "data": json.loads(row["data"]), "created_at": row["created_at"]}

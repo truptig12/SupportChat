@@ -1,6 +1,6 @@
 {
   "info": {
-    "_postman_id": "72122b78-c301-4789-8328-e1c4896d511f",
+    "_postman_id": "19519464-3f74-4785-abaf-7c4e5e2c6d78",
     "name": "Support Router API",
     "description": "LLM-driven customer support router.\n\n1. Import `local.postman_environment.json` as well and select it.\n2. Set `apiKey` to the APP_API_KEY in your server's .env.\n3. Start the server: `.venv/bin/uvicorn support_router.api:app --port 8000`.\n\nChat requests save `session_id` into `{{sessionId}}` automatically. Requests marked 'Continues the session' reuse it, so run folders top to bottom.\n\nRunning the WHOLE collection with the Runner? The per-user rate limit (20/min + 5 burst) will kick in around request 25. For local testing set `RATE_LIMIT_PER_MINUTE=200` in .env and restart the server, or set a Runner delay of 2500 ms.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
@@ -2080,6 +2080,289 @@
       ]
     },
     {
+      "name": "9. Mock ServiceNow (status + incidents)",
+      "description": "Stand-ins for ServiceNow used by the Android login-support journey. Run in order.",
+      "item": [
+        {
+          "name": "Get service status",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}"
+              },
+              {
+                "key": "X-User-Id",
+                "value": "{{userId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/service-status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "service-status"
+              ]
+            },
+            "description": "Known-issues check the app runs before asking the customer to troubleshoot."
+          }
+        },
+        {
+          "name": "ADMIN: simulate login outage",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "X-Admin-Key",
+                "value": "{{adminKey}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/admin/service-status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "admin",
+                "service-status"
+              ]
+            },
+            "description": "DEV ONLY. Needs X-Admin-Key = ADMIN_API_KEY from .env. The app then shows the amber 'Known issue' card.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"known_issue\",\n  \"message\": \"We're aware of a current issue affecting login.\",\n  \"affects\": [\n    \"login\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "ADMIN: back to operational",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "X-Admin-Key",
+                "value": "{{adminKey}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/admin/service-status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "admin",
+                "service-status"
+              ]
+            },
+            "description": "DEV ONLY. Clears the simulated outage.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"operational\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Raise incident",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 201', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('incidentRef', pm.response.json().reference);",
+                  "pm.test('phone redacted', () => pm.expect(pm.response.json().summary.message).to.include('[PHONE]'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}"
+              },
+              {
+                "key": "X-User-Id",
+                "value": "{{userId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/incidents",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "incidents"
+              ]
+            },
+            "description": "The confirmed support summary from the app. Returns INC-xxxxxx. Saves {{incidentRef}}.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"issue\": \"I haven't received my security code (OTP)\",\n  \"journey_stage\": \"Login - OTP verification\",\n  \"error_code\": \"TE-1001\",\n  \"steps_tried\": [\n    \"Wait 2 minutes before requesting another code\"\n  ],\n  \"context\": {\n    \"app_version\": \"1.0 (Android 16)\",\n    \"device\": \"Nothing A059\",\n    \"network\": \"Wi-Fi\",\n    \"attempts\": 1\n  },\n  \"service_status\": \"No known outage\",\n  \"suggested_cause\": \"Possible OTP delivery issue\",\n  \"customer_reference\": \"John123\",\n  \"message\": \"Please call me back on +44 7700 900123\",\n  \"confirmed\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Track incident",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}"
+              },
+              {
+                "key": "X-User-Id",
+                "value": "{{userId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/incidents/{{incidentRef}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "incidents",
+                "{{incidentRef}}"
+              ]
+            },
+            "description": "Mock lifecycle: 'received', then 'under_investigation' after INCIDENT_PROGRESS_SECONDS (120)."
+          }
+        },
+        {
+          "name": "422 incident without confirmation",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 422', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}"
+              },
+              {
+                "key": "X-User-Id",
+                "value": "{{userId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/incidents",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "incidents"
+              ]
+            },
+            "description": "The customer must tick 'I confirm this information is correct'.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"issue\": \"x\",\n  \"confirmed\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
       "name": "8. Errors",
       "description": "",
       "item": [
@@ -2329,6 +2612,10 @@
     },
     {
       "key": "handoffId",
+      "value": ""
+    },
+    {
+      "key": "incidentRef",
       "value": ""
     }
   ]
